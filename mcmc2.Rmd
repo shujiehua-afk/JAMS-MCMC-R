@@ -1,0 +1,179 @@
+---
+title: "mcmc-2"
+author: "Shujie Hua"
+date: "2025-11-21"
+output: html_document
+---
+
+```{r}
+set.seed(1)
+
+n  <- 50000
+b  <- 0.03
+
+# 1. 采样基准二维高斯
+library(MASS)
+Sigma <- matrix(c(100, 0,
+                   0, 1), nrow = 2)
+x     <- mvrnorm(n, mu = c(0,0), Sigma = Sigma)
+x1    <- x[,1]
+x2    <- x[,2]
+
+plot(x1, x2, pch=20, cex=0.4, col=rgb(0,0,0,0.3),
+     xlab="x1", ylab="x2", main="original Distribution")
+
+# 2. 施加香蕉变换
+y1 <- x1
+y2 <- x2 + b * (x1^2 - 100)
+
+# 3. 绘图
+plot(y1, y2, pch=20, cex=0.4, col=rgb(0,0,0,0.3),
+     xlab="y1", ylab="y2", main="2D Banana-shaped Distribution")
+
+```
+
+
+
+```{r}
+library(mvtnorm)
+# ---------------Input--------------- #
+beta <- c(1,0.8,0.6,0.4)  # temper_0,1,2 beta_0 = 1
+temper_num <- length(beta)
+
+target <- function(x){
+  0.5 * dmvnorm(x, mean = c(-2, -2), sigma = diag(2)) +
+  0.5 * dmvnorm(x, mean = c( 2,  2), sigma = diag(2))
+}
+
+start_where <- rep(list(c(0,0)), temper_num)
+Sigma       <- rep(list(diag(2)),temper_num)
+step <- 1000
+```
+
+```{r}
+# ---------------Iteration--------------- #
+parallel_tempering<- function(beta, temper_num, target, start_where,Sigma,step){
+  record <- list()
+  for (i in 1:temper_num){
+    record[[i]] <- list(start_where[[i]])
+  }
+  
+  # temper_num = even
+  for (s in 1:step){
+    
+    new_point_local <- vector("list", temper_num)
+    for (temper in 1:temper_num){
+      
+      # ---------------Local jump--------------- #
+      original_point <- record[[temper]][[length(record[[temper]])]]
+      #target_local   <- target^beta[temper] 
+      
+      propose_local  <- as.numeric(rmvnorm(1, original_point, Sigma[[temper]]))
+      acc_rate_local <- min(1, target(propose_local)^beta[temper]/target(original_point)^beta[temper])
+      
+      u_local <- runif(1)
+      if (u_local<acc_rate_local){
+        new_point_local[[temper]] <- propose_local
+      }else{
+        new_point_local[[temper]] <- original_point
+      }
+    }
+    
+    # ---------------Swith decision--------------- #
+    if (s%%2 == 1){
+      for (k in seq(1, temper_num,2)){
+        original_point2 <- new_point_local[[k]]
+        propose_switch  <- new_point_local[[k+1]]
+        
+        acc_rate_switch <- min(1, target(propose_switch)^(beta[k]-beta[k+1])*target(original_point2)^(beta[k+1]-beta[k]))
+        
+        u_switch1 <- runif(1)
+        if (u_switch1<acc_rate_switch){
+          record[[k]]   <- c(record[[k]],   list(new_point_local[[k+1]]))
+          record[[k+1]] <- c(record[[k+1]], list(new_point_local[[k]]))
+        }else{
+          record[[k]]   <- c(record[[k]],   list(new_point_local[[k]]))
+          record[[k+1]] <- c(record[[k+1]], list(new_point_local[[k+1]]))
+        }
+      }
+    }else{for (k in seq(2, temper_num-1,2)){
+            original_point2 <- new_point_local[[k]]
+            propose_switch  <- new_point_local[[k+1]]
+            
+            acc_rate_switch <- min(1, target(propose_switch)^(beta[k]-beta[k+1])*target(original_point2)^(beta[k+1]-beta[k]))
+            
+            u_switch1 <- runif(1)
+            if (u_switch1<acc_rate_switch){
+              record[[k]]   <- c(record[[k]],   list(new_point_local[[k+1]]))
+              record[[k+1]] <- c(record[[k+1]], list(new_point_local[[k]]))
+            }else{
+              record[[k]]   <-  c(record[[k]],   list(new_point_local[[k]]))
+              record[[k+1]] <-  c(record[[k+1]], list(new_point_local[[k+1]]))
+            }
+    }
+      record[[1]]          <- c(record[[1]],          list(new_point_local[[1]])) 
+      record[[temper_num]] <- c(record[[temper_num]], list(new_point_local[[temper_num]])) 
+    }
+  }
+  return(list(out = record))
+  }
+```
+
+
+```{r}
+# length(beta) needs to be even
+out <- parallel_tempering(
+          beta = c(1,0.8,0.6,0.4),
+          temper_num = length(beta), 
+          target = target, 
+          start_where = start_where,
+          Sigma = Sigma,
+          step = 3000
+          )
+```
+
+```{r}
+library(ggplot2)
+
+make_df <- function(rec, idx){
+    x <- numeric(length(rec))
+    y <- numeric(length(rec))
+    for (i in 1:length(rec)){
+        x[i] <- rec[[i]][1]
+        y[i] <- rec[[i]][2]
+    }
+    data.frame(x = x, y = y, chain = factor(idx))
+}
+
+df1 <- make_df(out[[1]][[1]], 1)
+df2 <- make_df(out[[1]][[2]], 2)
+df3 <- make_df(out[[1]][[3]], 3)
+df4 <- make_df(out[[1]][[4]], 4)
+
+df <- rbind(df1, df2, df3, df4)
+
+ggplot(df, aes(x = x, y = y, color = chain)) +
+    geom_point()
+
+
+```
+```{r}
+
+df5 <- data.frame(x = sapply(out[[1]][[1]], function(z) z[[1]]), y = sapply(out[[1]][[1]], function(z) z[[2]]) )
+ggplot(df5, aes(x = x, y = y)) +
+    geom_point(color = 'pink', size = 0.1) +
+    stat_density_2d(
+                    geom = "contour", 
+                    color = "black")
+
+```
+```{r}
+df6<- data.frame(x = sapply(out[[1]][[4]], function(z) z[[1]]), y = sapply(out[[1]][[4]], function(z) z[[2]]) )
+
+ggplot(df6,aes(x=x, y= y),)+geom_point(color = 'purple', size = 0.1)+
+    stat_density_2d(
+                    geom = "contour", 
+                    color = "black")
+```
+
+

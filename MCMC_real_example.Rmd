@@ -1,0 +1,408 @@
+---
+title: "MCMC_real_example"
+author: "Shujie Hua"
+date: "2025-11-16"
+output: html_document
+---
+```{r}
+source('/Users/huashujie/Desktop/MCMC_func.R')
+
+```
+
+# JAMS_MCMC(steps, start_state, start_gamma,mean_modes, target, epsilon, d, AC1, AC2,alpha, alpha_opt, beta, epsilon_w,update_Sigma,update_w)
+
+# 简单实例演示
+```{r}
+target <- function(x){
+  0.5 * dmvnorm(x, mean = c(-2, -2), sigma = diag(2)) +
+  0.5 * dmvnorm(x, mean = c( 2,  2), sigma = diag(2))
+}
+
+# 定义初始状态与 gamma
+start_state <- list(x = c(0,0), i = 1)
+
+start_gamma <- list(
+  w = c(0.5, 0.5),
+  Sigma = list(diag(2)*1, diag(2)*1),
+  Sigma_tilde = list(diag(2)*1, diag(2)*1)
+)
+
+mean_modes <- list(
+  c(-2,-2),
+  c( 2, 2)
+)
+```
+
+```{r}
+out <- JAMS_MCMC(
+         steps       = 2000, 
+         start_state = start_state, 
+         start_gamma = start_gamma,
+         mean_modes  = mean_modes, 
+         target      = target, 
+         epsilon     = 0.1, 
+         d           = 2, 
+         AC1         = 300, 
+         AC2         = 100,
+         alpha       = 0.7, 
+         alpha_opt   = 0.3, 
+         beta        = 1e-5, 
+         epsilon_w   = 1e-5,
+         update_Sigma= TRUE,
+         update_w    = TRUE  
+       )
+```
+
+# 简单作图
+```{r}
+
+# out$log[10][[1]]$x
+xs <- t(sapply(out$log, function(z) z$x))
+plot(xs[,1], xs[,2],
+     pch=20, col=rgb(0,0,1,0.3),
+     xlab="x1", ylab="x2",
+     main="JAMS sample trace")
+
+```
+```{r}
+set.seed(1)
+results <- list()
+idx <- 1
+
+for(uS in c(TRUE, FALSE)){
+  for(uW in c(TRUE, FALSE)){
+    
+    cat("Running: update_Sigma =", uS, ", update_w =", uW, "\n")
+    
+    results[[idx]] <- JAMS_MCMC(
+      steps = 5000,
+      start_state = start_state,
+      start_gamma = start_gamma,
+      mean_modes = mean_modes,
+      target = target,
+      epsilon = 0.1,
+      d = 2,
+      AC1 = 500, 
+      AC2 = 100,
+      alpha = 0.7, 
+      alpha_opt = 0.3, 
+      beta = 1e-5, 
+      epsilon_w = 1e-5,
+      update_Sigma = uS,
+      update_w     = uW
+    )
+    
+    names(results)[idx] <- paste0("Sigma_", uS, "_w_", uW)
+    idx <- idx + 1
+  }
+}
+
+```
+
+
+```{r}
+accept_times_TT <- mean(sapply(results[[1]]$log,function(z) z$accepted) )
+accept_times_TF <- mean(sapply(results[[2]]$log,function(z) z$accepted) )
+accept_times_FT <- mean(sapply(results[[3]]$log,function(z) z$accepted) )
+accept_times_FF <- mean(sapply(results[[4]]$log,function(z) z$accepted) )
+
+accept_times_TT 
+accept_times_TF
+accept_times_FT
+accept_times_FF
+
+```
+# ESS
+```{r}
+library(coda)
+ess_all <- function(out,d){
+  xs <- t(sapply(out$log, function(z) z$x))
+  ess_vec <- numeric(d)
+  for(i in 1:d){
+    ess_vec[i] <- effectiveSize(xs[, i])
+  }
+  
+  return(ess_vec)
+}
+
+```
+
+
+```{r}
+ess_all(results[[1]],2)
+ess_all(results[[2]],2)
+ess_all(results[[3]],2)
+ess_all(results[[4]],2)
+```
+
+
+
+
+
+# 保存留作长期使用
+```{r}
+log_df <- do.call(
+  rbind,
+  lapply(out$log, function(rec){
+    
+    # 把 rec 转为 data.frame
+    df <- as.data.frame(rec, stringsAsFactors = FALSE)
+    
+    # 如果 x 是长度>1的向量，则展开
+    if(is.list(rec$x)){
+      df$x1 <- rec$x[[1]][1]
+      df$x2 <- rec$x[[1]][2]
+    } else if(length(rec$x) == 2){
+      df$x1 <- rec$x[1]
+      df$x2 <- rec$x[2]
+    }
+
+    # 展开 proposed_point
+    if(is.list(rec$proposed_point)){
+      df$p1 <- rec$proposed_point[[1]][1]
+      df$p2 <- rec$proposed_point[[1]][2]
+    } else if(length(rec$proposed_point) == 2){
+      df$p1 <- rec$proposed_point[1]
+      df$p2 <- rec$proposed_point[2]
+    }
+
+    # 删除原始 vector 列
+    df$x <- NULL
+    df$proposed_point <- NULL
+
+    return(df)
+  })
+)
+
+write.csv(log_df, file = "/Users/huashujie/Downloads/JAMS_log.csv", row.names = FALSE)
+```
+
+
+
+
+<!-- # 简单动画 -->
+<!-- ```{r} -->
+<!-- library(dplyr) -->
+<!-- library(tidyr) -->
+<!-- library(ggplot2) -->
+<!-- library(gganimate) -->
+
+
+<!-- # 双峰 target -->
+<!-- target_density <- function(x){ -->
+<!--     0.5 * dmvnorm(x, c(-2,-2), diag(2)) + -->
+<!--     0.5 * dmvnorm(x, c( 2, 2), diag(2)) -->
+<!-- } -->
+
+<!-- # 生成背景网格 -->
+<!-- xx <- seq(-6, 6, length.out = 200) -->
+<!-- yy <- seq(-6, 6, length.out = 200) -->
+<!-- grid <- expand.grid(x1 = xx, x2 = yy) -->
+<!-- grid$z <- apply(grid, 1, function(r) target_density(c(r[1], r[2]))) -->
+<!-- p <- ggplot() + -->
+<!--   # target density contour -->
+<!--   geom_contour(data = grid, aes(x = x1, y = x2, z = z), bins = 12, color = "grey70") + -->
+
+<!--   # proposal arrow -->
+<!--   geom_segment(data = log_df, -->
+<!--                aes(x = x1, y = x2, xend = p1, yend = p2, -->
+<!--                    color = proposal_type, -->
+<!--                    alpha = acc_rate), -->
+<!--                arrow = arrow(length = unit(0.15, "cm"))) + -->
+
+<!--   # proposed point (green accepted, red rejected) -->
+<!--   geom_point(data = log_df, -->
+<!--              aes(x = p1, y = p2, -->
+<!--                  color = accepted, -->
+<!--                  shape = accepted), -->
+<!--              size = 2) + -->
+
+<!--   # current x point -->
+<!--   geom_point(data = log_df, -->
+<!--              aes(x = x1, y = x2), -->
+<!--              color = "blue", size = 3) + -->
+
+<!--   scale_color_manual(values = c("TRUE"="green3", "FALSE"="red3", -->
+<!--                                 "local"="blue", "jump"="purple")) + -->
+
+<!--   scale_shape_manual(values = c("TRUE"=16, "FALSE"=4)) + -->
+
+<!--   ggtitle("JAMS sampling at step: {frame}") + -->
+
+<!--   transition_manual(step) + -->
+<!--   theme_minimal(base_size = 14) -->
+
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- animate(p, fps = 15, nframes = max(log_df$step), width=600, height=600) -->
+<!-- ``` -->
+<!-- ```{r} -->
+<!-- anim_save("/Users/huashujie/Downloads/JAMS_animation.gif") -->
+<!-- ``` -->
+
+<!-- # 三维3峰示例 -->
+```{r}
+library(mvtnorm)
+
+target <- function(x){
+  0.1 * dmvnorm(x, mean = c(-2,-5, 3), sigma = diag(3)) +
+  0.3 * dmvnorm(x, mean = c( 0, 0, 0), sigma = diag(3)) +
+  0.6 * dmvnorm(x, mean = c( 4, 4, 4), sigma = diag(3))
+}
+mean_modes <- list(
+  c(-2,-5, 3),
+  c( 0, 0, 0),
+  c( 4, 4, 4)
+)
+start_state <- list(
+  x = c(0,0,0),
+  i = 2  # 从峰 2 开始
+)
+start_gamma <- list(
+  w = c(0.1, 0.3, 0.6),
+  Sigma = list(diag(3)*1, diag(3)*1, diag(3)*1),
+  Sigma_tilde = list(diag(3)*1, diag(3)*1, diag(3)*1)
+)
+set.seed(1)
+out <- JAMS_MCMC(
+  steps = 20000,
+  start_state = start_state,
+  start_gamma = start_gamma,
+  mean_modes = mean_modes,
+  target = target,
+  epsilon = 0.1,
+  d = 3,
+  AC1 = 2000,
+  AC2 = 1000,
+  alpha = 0.7,
+  alpha_opt = 1e-5,
+  beta = 1e-5,
+  epsilon_w = 1e-5
+)
+```
+
+
+```{r}
+library(plotly)
+
+# 从 out$log 提取样本
+X <- t(sapply(out$log, function(z) z$x))
+mode <- sapply(out$log, function(z) z$i)  # 如果您要按 mode 染色
+
+df <- data.frame(
+  x1 = X[,1],
+  x2 = X[,2],
+  x3 = X[,3],
+  mode = factor(mode)
+)
+
+# 只画样本点，按 mode 染色
+plot_ly(
+  data = df,
+  x = ~x1, y = ~x2, z = ~x3,
+  type = "scatter3d",
+  mode = "markers",
+  color = ~mode,
+  marker = list(size = 1)
+) %>%
+  layout(
+    scene = list(
+      xaxis = list(title = "x1"),
+      yaxis = list(title = "x2"),
+      zaxis = list(title = "x3")
+    )
+  )
+
+```
+```{r}
+# ESS
+# 提取 x_t
+X <- t(sapply(out$log, function(z) z$x))
+# steps 行，d 列
+library(coda)
+
+mcmc_obj <- mcmc(X)
+ess_vec <- effectiveSize(mcmc_obj)
+ess_vec
+
+```
+
+
+
+# 找错峰
+```{r}
+library(mvtnorm)
+
+target <- function(x){
+  0.1 * dmvnorm(x, mean = c(-2,-5, 3), sigma = diag(3)) +
+  0.3 * dmvnorm(x, mean = c( 0, 0, 0), sigma = diag(3)) +
+  0.6 * dmvnorm(x, mean = c( 4, 4, 4), sigma = diag(3))
+}
+mean_modes <- list(
+  c(-6,  6,  6),     # ★ 故意写错，与真实峰 c(-2,-5,3) 完全不在同域
+  c( 0,  0,  0),
+  c( 4,  4,  4)
+)
+start_state <- list(
+  x = c(0,0,0),
+  i = 2  # 从峰 2 开始
+)
+start_gamma <- list(
+  w = c(0.1, 0.3, 0.6),
+  Sigma = list(diag(3)*1, diag(3)*1, diag(3)*1),
+  Sigma_tilde = list(diag(3)*1, diag(3)*1, diag(3)*1)
+)
+set.seed(1)
+out2 <- JAMS_MCMC(
+  steps = 20000,
+  start_state = start_state,
+  start_gamma = start_gamma,
+  mean_modes = mean_modes,
+  target = target,
+  epsilon = 0.1,
+  d = 3,
+  AC1 = 2000,
+  AC2 = 1000,
+  alpha = 0.7,
+  alpha_opt = 1e-5,
+  beta = 1e-5,
+  epsilon_w = 1e-5
+)
+```
+
+
+```{r}
+library(plotly)
+
+# 从 out$log 提取样本
+X <- t(sapply(out2$log, function(z) z$x))
+mode <- sapply(out2$log, function(z) z$i)  # 如果您要按 mode 染色
+
+df <- data.frame(
+  x1 = X[,1],
+  x2 = X[,2],
+  x3 = X[,3],
+  mode = factor(mode)
+)
+
+# 只画样本点，按 mode 染色
+plot_ly(
+  data = df,
+  x = ~x1, y = ~x2, z = ~x3,
+  type = "scatter3d",
+  mode = "markers",
+  color = ~mode,
+  marker = list(size = 1)
+) %>%
+  layout(
+    scene = list(
+      xaxis = list(title = "x1"),
+      yaxis = list(title = "x2"),
+      zaxis = list(title = "x3")
+    )
+  )
+```
+
+
+
