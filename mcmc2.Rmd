@@ -52,67 +52,88 @@ step <- 1000
 
 ```{r}
 # ---------------Iteration--------------- #
-parallel_tempering<- function(beta, temper_num, target, start_where,Sigma,step){
-  record <- list()
+parallel_tempering<- function(beta, temper_num, target, start_where,Sigma,step,d){
+  record          <- array(NA_real_, dim = c(temper_num,(step+1),d))
+  proposal_points <- array(NA_real_, dim = c(temper_num,step    ,d))
+  prob.all        <- matrix(0      , nrow = temper_num, ncol = (2*step))
+  
   for (i in 1:temper_num){
-    record[[i]] <- list(start_where[[i]])
+    record[i,1,] <- start_where[[i]]
   }
   
   # temper_num = even
   for (s in 1:step){
-    
-    new_point_local <- vector("list", temper_num)
     for (temper in 1:temper_num){
-      
       # ---------------Local jump--------------- #
-      original_point <- record[[temper]][[length(record[[temper]])]]
-      #target_local   <- target^beta[temper] 
+      original_point              <- record[temper, s,]
+      # 先把proposal_points的对应位置改成local提议点
+      proposal_points[temper,s,]  <- rmvnorm(1, original_point, Sigma[[temper]])
+      # prob.all 2s-1列记录第s次更新，初始点        的target()
+      # prob.all 2s  列记录第s次更新，local_proposal的target()
+      prob.all[temper,2*s-1]     <- target(original_point)
+      prob.all[temper,2*s]       <- target(proposal_points[temper,s,])
       
-      propose_local  <- as.numeric(rmvnorm(1, original_point, Sigma[[temper]]))
-      acc_rate_local <- min(1, target(propose_local)^beta[temper]/target(original_point)^beta[temper])
+      # 计算acceptance rate
+      # acc_rate_local <- min(1, target(propose_local)^beta[temper]/target(original_point)^beta[temper])
+      acc_rate_local <- min(1, exp(beta[temper]*(log(prob.all[temper,2*s])-log(prob.all[temper,2*s-1]))))
+      
       
       u_local <- runif(1)
       if (u_local<acc_rate_local){
-        new_point_local[[temper]] <- propose_local
+        proposal_points[temper,s,] <- proposal_points[temper,s,]
       }else{
-        new_point_local[[temper]] <- original_point
+        # 如果拒绝更换位置
+        # proposal_points的对应位置改回第s次更新初始点
+        # prob.all 2s列对应修改，保证始终反应proposal_points的s列的target()
+        proposal_points[temper,s,] <- original_point
+        prob.all[temper,2*s]       <- prob.all[temper,2*s-1]
       }
     }
     
     # ---------------Swith decision--------------- #
     if (s%%2 == 1){
       for (k in seq(1, temper_num,2)){
-        original_point2 <- new_point_local[[k]]
-        propose_switch  <- new_point_local[[k+1]]
+        # 更换1<->2; 3<->4...
+        original_point2 <- proposal_points[k  ,s,]
+        propose_switch  <- proposal_points[k+1,s,]
+        # 于是，target(propose_switch) 就是prob.all[k+1,2*s]
+        #       target(original_point2)就是prob.all[k  ,2*s]
         
-        acc_rate_switch <- min(1, target(propose_switch)^(beta[k]-beta[k+1])*target(original_point2)^(beta[k+1]-beta[k]))
         
+        # acc_rate_switch <- min(1, target(propose_switch)^(beta[k]-beta[k+1])*target(original_point2)^(beta[k+1]-beta[k]))
+        acc_rate_switch <- min(1, exp(log(prob.all[k+1,2*s])*(beta[k]-beta[k+1])+log(prob.all[k,2*s])*(beta[k+1]-beta[k])))
+        
+  
         u_switch1 <- runif(1)
         if (u_switch1<acc_rate_switch){
-          record[[k]]   <- c(record[[k]],   list(new_point_local[[k+1]]))
-          record[[k+1]] <- c(record[[k+1]], list(new_point_local[[k]]))
+          # 更新record的s+1列
+          record[k  ,s+1,]   <- proposal_points[k+1,s,]
+          record[k+1,s+1,]   <- proposal_points[k  ,s,]
         }else{
-          record[[k]]   <- c(record[[k]],   list(new_point_local[[k]]))
-          record[[k+1]] <- c(record[[k+1]], list(new_point_local[[k+1]]))
+          record[k  ,s+1,]   <- proposal_points[k  ,s,]
+          record[k+1,s+1,]   <- proposal_points[k+1,s,]
         }
       }
     }else{for (k in seq(2, temper_num-1,2)){
-            original_point2 <- new_point_local[[k]]
-            propose_switch  <- new_point_local[[k+1]]
+      # 更换2<->3; 4<->5...
+        original_point2 <- proposal_points[k  ,s,]
+        propose_switch  <- proposal_points[k+1,s,]
+       
+        # acc_rate_switch <- min(1, target(propose_switch)^(beta[k]-beta[k+1])*target(original_point2)^(beta[k+1]-beta[k]))
+        acc_rate_switch <- min(1, exp(log(prob.all[k+1,2*s])*(beta[k]-beta[k+1])+log(prob.all[k,2*s])*(beta[k+1]-beta[k])))  
             
-            acc_rate_switch <- min(1, target(propose_switch)^(beta[k]-beta[k+1])*target(original_point2)^(beta[k+1]-beta[k]))
-            
-            u_switch1 <- runif(1)
-            if (u_switch1<acc_rate_switch){
-              record[[k]]   <- c(record[[k]],   list(new_point_local[[k+1]]))
-              record[[k+1]] <- c(record[[k+1]], list(new_point_local[[k]]))
-            }else{
-              record[[k]]   <-  c(record[[k]],   list(new_point_local[[k]]))
-              record[[k+1]] <-  c(record[[k+1]], list(new_point_local[[k+1]]))
-            }
+        u_switch1 <- runif(1)
+        if (u_switch1<acc_rate_switch){
+          # 更新record的s+1列
+          record[k  ,s+1,]   <- proposal_points[k+1,s,]
+          record[k+1,s+1,]   <- proposal_points[k  ,s,]
+        }else{
+          record[k  ,s+1,]   <- proposal_points[k  ,s,]
+          record[k+1,s+1,]   <- proposal_points[k+1,s,]
+        }
     }
-      record[[1]]          <- c(record[[1]],          list(new_point_local[[1]])) 
-      record[[temper_num]] <- c(record[[temper_num]], list(new_point_local[[temper_num]])) 
+      record[1         , s+1,] <- proposal_points[1         ,s,]
+      record[temper_num, s+1,] <- proposal_points[temper_num,s,]
     }
   }
   return(list(out = record))
@@ -122,38 +143,40 @@ parallel_tempering<- function(beta, temper_num, target, start_where,Sigma,step){
 
 ```{r}
 # length(beta) needs to be even
+t0 <- proc.time()
 out <- parallel_tempering(
           beta = c(1,0.8,0.6,0.4),
           temper_num = length(beta), 
           target = target, 
           start_where = start_where,
           Sigma = Sigma,
-          step = 3000
+          step = 3000,
+          d=2
           )
+proc.time() - t0
 ```
 
 ```{r}
 library(ggplot2)
 
-make_df <- function(rec, idx){
-    x <- numeric(length(rec))
-    y <- numeric(length(rec))
-    for (i in 1:length(rec)){
-        x[i] <- rec[[i]][1]
-        y[i] <- rec[[i]][2]
-    }
-    data.frame(x = x, y = y, chain = factor(idx))
+make_df <- function(record, chain_id){
+    nstep <- dim(record)[2]
+    data.frame(
+        x = record[chain_id, , 1],
+        y = record[chain_id, , 2],
+        chain = factor(chain_id)
+    )
 }
 
-df1 <- make_df(out[[1]][[1]], 1)
-df2 <- make_df(out[[1]][[2]], 2)
-df3 <- make_df(out[[1]][[3]], 3)
-df4 <- make_df(out[[1]][[4]], 4)
+rec <- out$out   # out 为 parallel_tempering 的返回值
 
-df <- rbind(df1, df2, df3, df4)
+df_list <- lapply(1:dim(rec)[1], function(i) make_df(rec, i))
+df <- do.call(rbind, df_list)
+
+library(ggplot2)
 
 ggplot(df, aes(x = x, y = y, color = chain)) +
-    geom_point()
+    geom_point(size = 0.3)
 
 
 ```
