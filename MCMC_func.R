@@ -114,13 +114,58 @@ jump_move <- function(state, mean_modes, target, gamma){
   return(list(x = y, acc = acc_rate, mode = k))
 }
 
+# Jump move (deterministic):
+# jump_move: return newproposal point & acceptance rate
+jump_move_deterministic <- function(state, mean_modes, target, gamma){
+  
+  x          <- state$x
+  i          <- state$i     # current mode
+  w          <- gamma$w
+  Sigma_list <- gamma$Sigma
+  N          <- length(w)
+  
+  # --- choose new mode k
+  k <- sample(setdiff(1:N, i), 1)
+  
+  # --- propose y from mode k
+  # --- use deterministic method
 
+  lambda_gamma_i <- chol(Sigma_list[[i]])
+  lambda_gamma_k <- chol(Sigma_list[[k]])
+  
+  y <- mean_modes[[k]]+lambda_gamma_k%*%solve(lambda_gamma_i,(x-mean_modes[[i]]))
+  
+  # -----------------------------
+  # define tilde-pi function
+  # -----------------------------
+  p_tilde <- function(x, mode){
+    Qi_x <- dmvnorm(x, mean = mean_modes[[mode]], sigma = Sigma_list[[mode]])
+    
+    S_x <- 0
+    for(j in 1:N){
+      S_x <- S_x + w[j] * dmvnorm(x, mean = mean_modes[[j]], sigma = Sigma_list[[j]])
+    }
+    return( target(x) * w[mode] * Qi_x / S_x )
+  }
+  
+  # a_ik = a_ki = 1/(N-1)
+  a_ik <- 1/(N-1)
+  a_ki <- 1/(N-1)
+  
+  # acceptance ratio
+  num <- p_tilde(y, k) * a_ki * sqrt(det(Sigma_list[[k]]))
+  den <- p_tilde(x, i) * a_ik * sqrt(det(Sigma_list[[i]]))
+  
+  acc_rate <- min(1, num / den)
+  
+  return(list(x = y, acc = acc_rate, mode = k))
+}
 
 
 
 # 内层循环
 
-JAMS_step <- function(state, gamma, mean_modes, target, epsilon){
+JAMS_step <- function(state, gamma, mean_modes, target, epsilon,deterministic){
   
   x <- state$x
   i <- state$i
@@ -153,11 +198,14 @@ JAMS_step <- function(state, gamma, mean_modes, target, epsilon){
     
   } else {
     ## ---- jump move ----
-    proposal <- jump_move(state, mean_modes, target, gamma)
-    
+    if (deterministic){
+      proposal <- jump_move_deterministic(state, mean_modes, target, gamma)
+    }else{
+      proposal <- jump_move(state, mean_modes, target, gamma)
+      }        
     y   <- proposal$x
     acc <- proposal$acc
-    k   <- proposal$mode        
+    k   <- proposal$mode
     
     proposal_type <- "jump"
     
@@ -276,7 +324,8 @@ update_gamma <- function(out, gamma, mode_count, Sigma_obs,
 JAMS_MCMC <- function(steps, start_state, start_gamma,
                       mean_modes, target, epsilon, d, AC1, AC2,alpha, alpha_opt, beta, epsilon_w,
                       update_Sigma = TRUE,
-                      update_w     = TRUE){
+                      update_w     = TRUE,
+                      deterministic = FALSE){
   
   state <- start_state
   gamma <- start_gamma
