@@ -1,0 +1,272 @@
+---
+title: "Untitled"
+author: "Shujie Hua"
+date: "2025-11-25"
+output: html_document
+---
+
+```{r}
+source('~/Documents/Github/JAMS-MCMC-R/parallel_tempering.R')
+```
+
+```{r}
+banana_func <- function(d, center, Sigma, b = 0.03){
+  Sigma_inv <- solve(Sigma)
+  const <- -0.5 * ( d * log(2*pi) + log(100) )
+
+  # 返回的密度函数：输入 y（长度 d），输出香蕉分布密度
+  banana_density <- function(y){
+    f <- y
+    f[2] <- y[2] - b * (y[1]^2 - 10)
+    log_density <- -0.5 * t(f - center) %*% Sigma_inv %*% (f - center) + const
+    return( exp(log_density) )
+  }
+  banana_density
+}
+```
+
+
+```{r}
+d<-3
+center <- c(1,2,3)
+Sigma2  <- diag(c(100, rep(1, d - 1)))
+b      <- 0.03
+#banana_density(center,Sigma2,b)(c(1,2,3))
+```
+
+```{r}
+out <- parallel_tempering(beta = beta <- c(1, 0.8, 0.6, 0.4, 0.2),
+                   temper_num = 5,
+                   target = banana_func(2,center,Sigma2), 
+                   start_where = rep(list(rep(0,3)), 5),
+                   Sigma =  rep(list(diag(3)), 5),
+                   step = 5000,
+                   d = 3)
+rec <- out$record      # [chain, step, dim]
+n_step <- dim(rec)[2]
+
+# 只取最低温链（第 1 链）的前两个维度
+X <- rec[1, , 1:2]      # n_step × 2
+
+df <- data.frame(
+    x = X[,1],
+    y = X[,2]
+)
+
+ggplot(df, aes(x = x, y = y)) +
+    geom_point(size = 0.3, color = "black", alpha = 0.7) +
+    labs(title = "Lowest-temperature chain: (x1, x2) projection")
+```
+
+
+
+
+
+
+
+```{r}
+library(mvtnorm)
+
+final_target <- function(Centers, Sigmas, weights, ifbanana, b = 0.03){
+
+  d <- length(Centers[[1]])
+  k <- length(weights)
+
+  comps <- vector("list", k)
+
+  for(i in seq_len(k)){
+
+    if(ifbanana[i]){
+      # banana 分量
+      comps[[i]] <- banana_func(
+        d      = d,
+        center = Centers[[i]],
+        Sigma  = Sigmas[[i]],
+        b      = b
+      )
+
+    } else {
+      # 普通高斯分量：直接用 dmvnorm
+      comps[[i]] <- function(y){
+        dmvnorm(
+          x     = y,
+          mean  = Centers[[i]],
+          sigma = Sigmas[[i]]
+        )
+      }
+    }
+  }
+
+  function(y){
+    out <- 0
+    for(i in seq_len(k)){
+      out <- out + weights[i] * comps[[i]](y)
+    }
+    out
+  }
+}
+
+
+```
+
+
+```{r}
+d <- 6
+Centers <-
+  list(
+    c( 5, 8.5,1,0,0,0),
+    c(-5,8.5,0,1,0,0),
+    c(-8.5, -5,0,0,1,0),
+    c( 0,-10,0,0,0,1),
+    c( 8.5,-5,0,0,0,0)
+  )
+
+Sigmas <- 
+  list(
+    diag(rep(2,d)),
+    diag(c(100, rep(1, d - 1))),
+    diag(rep(1,d)),
+    diag(rep(3,d)),
+    diag(c(100, rep(1, d - 1)))
+  )
+
+weights <- c(0.1,0.2,0.25,0.25,0.2)
+ifbanana <- c(F,T,F,F,T)
+
+weighted_target<- final_target(Centers=Centers,
+             Sigmas = Sigmas,
+             weights = weights,
+             ifbanana = ifbanana)
+```
+
+```{r}
+library(mvtnorm)
+library(ggplot2)
+
+sample_one <- function(center, Sigma, banana = FALSE, b = 0.03){
+  x <- rmvnorm(1, mean = center, sigma = Sigma)
+  if(banana){
+    y <- x
+    y[2] <- x[2] + b*(x[1]^2 - 100)
+    return(y)
+  } else {
+    return(x)
+  }
+}
+
+N <- 20000
+df <- data.frame(
+  y1 = numeric(N),
+  y2 = numeric(N),
+  comp = integer(N)
+)
+
+for(n in 1:N){
+  comp <- sample(1:5, 1, prob = weights)
+  x <- sample_one(Centers[[comp]], Sigmas[[comp]], ifbanana[comp])
+  df$y1[n] <- x[1]
+  df$y2[n] <- x[2]
+  df$comp[n] <- comp
+}
+
+ggplot(df, aes(x = y1, y = y2, color = factor(comp))) +
+  geom_point(size = 0.3) +
+  coord_cartesian(xlim = c(-40, 40), ylim = c(-20, 30))+
+  scale_color_manual(values = c("#1f77b4","#d62728","#2ca02c","#9467bd","#ff7f0e")) +
+  theme_minimal() +
+  labs(x = "y1", y = "y2", color = "component")
+
+```
+```{r}
+out <- parallel_tempering(beta = beta <- c(1, 0.8, 0.6, 0.4, 0.2),
+                   temper_num = 5,
+                   target = weighted_target, 
+                   start_where = rep(list(rep(0,6)), 5),
+                   Sigma =  rep(list(diag(6)), 5),
+                   step = 20000,
+                   d = 6)
+
+```
+
+```{r}
+library(ggplot2)
+rec <- out$record      # [chain, step, dim]
+n_step <- dim(rec)[2]
+
+# 只取最低温链（第 1 链）的前两个维度
+X <- rec[1, , 1:2]      # n_step × 2
+
+df <- data.frame(
+    x = X[,1],
+    y = X[,2]
+)
+
+ggplot(df, aes(x = x, y = y)) +
+    geom_point(size = 0.3, color = "black", alpha = 0.7) +
+    labs(title = "Lowest-temperature chain: (x1, x2) projection")
+```
+```{r}
+source('~/Documents/Github/JAMS-MCMC-R/MCMC_func.R')
+```
+
+```{r}
+d <- 6
+start_state <- list(x = rep(0,6), i = 1)
+
+mean_modes<-
+  list(
+    c( 10, 10,1,0,0,0),
+    c(-10,-10,0,1,0,0),
+    c(-10, 10,0,0,1,0),
+    c( 10,-10,0,0,0,1),
+    c( 0, 0,0,0,0,0)
+  )
+
+start_Sigma <- 
+  list(
+    diag(rep(2,d)),
+    diag(c(100, rep(1, d - 1))),
+    diag(rep(1,d)),
+    diag(rep(3,d)),
+    diag(c(100, rep(1, d - 1)))
+  )
+
+start_gamma <- list(
+  w = c(0.1,0.2,0.25,0.25,0.2),
+  Sigma = start_Sigma,
+  Sigma_tilde = start_Sigma
+)
+
+
+out3 <- JAMS_MCMC(
+         steps       = 200000, 
+         start_state = start_state, 
+         start_gamma = start_gamma,
+         mean_modes  = mean_modes, 
+         target      = weighted_target, 
+         epsilon     = 0.5, 
+         d           = 6, 
+         AC1         = 300, 
+         AC2         = 100,
+         alpha       = 0.7, 
+         alpha_opt   = 0.3, 
+         beta        = 1e-5, 
+         epsilon_w   = 1e-5,
+         update_Sigma= TRUE,
+         update_w    = TRUE,
+        deterministic = TRUE
+       )
+```
+
+
+```{r}
+xs <- t(sapply(out3$log, function(z) z$x))
+df_xs<-data.frame(x = xs[,1],y = xs[,2])
+ggplot(df_xs,aes(x=x,y=y))+geom_point(size = 0.1)+coord_cartesian(xlim = c(-40, 40), ylim = c(-20, 30))
+```
+
+```{r}
+table(sapply(out3$log, function(x) x$i))
+```
+
+

@@ -198,5 +198,9 @@ ggplot(df6,aes(x=x, y= y),)+geom_point(color = 'purple', size = 0.1)+
                     geom = "contour", 
                     color = "black")
 ```
-
+```{r}
+num <- 11
+pairs <- cbind(seq(1,num-1,2),seq(2,num,2))
+pairs
+```
 

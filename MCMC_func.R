@@ -40,29 +40,33 @@ local_move <- function(state, mean_modes, target, gamma){
   Sigma_i    <- gamma$Sigma[[i]]
   w          <- gamma$w
   N          <- length(w)        # number of modes
-  
+
   # --- propose y from N(x, Sigma_i)
   y <- as.numeric(rmvnorm(1, mean = x, sigma = Sigma_i))
+  y <- as.numeric(y) 
+  x <- as.numeric(x) 
   
   # Q_i(x) and Q_i(y)
   Qi_x <- dmvnorm(x,  mean = mean_i, sigma = Sigma_i)
   Qi_y <- dmvnorm(y,  mean = mean_i, sigma = Sigma_i)
-  
-  # S(x) = sum_j w_j Q_j(x)
+
+    # S(x) = sum_j w_j Q_j(x)
   S_x <- 0
   S_y <- 0
   for(j in 1:N){
     S_x <- S_x + w[[j]] * dmvnorm(x, mean = mean_modes[[j]], sigma = gamma$Sigma[[j]])
     S_y <- S_y + w[[j]] * dmvnorm(y, mean = mean_modes[[j]], sigma = gamma$Sigma[[j]])
   }
-  
+
   # numerator: π(y) * Q_i(y) * S(x)
   num <- target(y) * Qi_y * S_x
   
   # denominator: π(x) * Q_i(x) * S(y)
   den <- target(x) * Qi_x * S_y
   
-  acc_rate <- min(1, num / den)
+  ratio <- num / den
+  ratio[!is.finite(ratio)] <- 0
+  acc_rate <- min(1, ratio)
   
   return(list(x = y, acc = acc_rate, mode = i))
 }
@@ -71,7 +75,6 @@ local_move <- function(state, mean_modes, target, gamma){
 
 # jump_move: return newproposal point & acceptance rate
 jump_move <- function(state, mean_modes, target, gamma){
-  
   x          <- state$x
   i          <- state$i     # current mode
   w          <- gamma$w
@@ -109,7 +112,10 @@ jump_move <- function(state, mean_modes, target, gamma){
   num <- p_tilde(y, k) * a_ki * R_i_x
   den <- p_tilde(x, i) * a_ik * R_k_y
   
-  acc_rate <- min(1, num / den)
+  ratio <- num / den
+  ratio[!is.finite(ratio)] <- 0
+  acc_rate <- min(1, ratio)
+  
   
   return(list(x = y, acc = acc_rate, mode = k))
 }
@@ -117,7 +123,6 @@ jump_move <- function(state, mean_modes, target, gamma){
 # Jump move (deterministic):
 # jump_move: return newproposal point & acceptance rate
 jump_move_deterministic <- function(state, mean_modes, target, gamma){
-  
   x          <- state$x
   i          <- state$i     # current mode
   w          <- gamma$w
@@ -129,18 +134,18 @@ jump_move_deterministic <- function(state, mean_modes, target, gamma){
   
   # --- propose y from mode k
   # --- use deterministic method
-
   lambda_gamma_i <- chol(Sigma_list[[i]])
   lambda_gamma_k <- chol(Sigma_list[[k]])
   
   y <- mean_modes[[k]]+lambda_gamma_k%*%solve(lambda_gamma_i,(x-mean_modes[[i]]))
   
+  y <- as.numeric(y) 
+  x <- as.numeric(x) 
   # -----------------------------
   # define tilde-pi function
   # -----------------------------
   p_tilde <- function(x, mode){
     Qi_x <- dmvnorm(x, mean = mean_modes[[mode]], sigma = Sigma_list[[mode]])
-    
     S_x <- 0
     for(j in 1:N){
       S_x <- S_x + w[j] * dmvnorm(x, mean = mean_modes[[j]], sigma = Sigma_list[[j]])
@@ -156,7 +161,9 @@ jump_move_deterministic <- function(state, mean_modes, target, gamma){
   num <- p_tilde(y, k) * a_ki * sqrt(det(Sigma_list[[k]]))
   den <- p_tilde(x, i) * a_ik * sqrt(det(Sigma_list[[i]]))
   
-  acc_rate <- min(1, num / den)
+  ratio <- num / den
+  ratio[!is.finite(ratio)] <- 0
+  acc_rate <- min(1, ratio)
   
   return(list(x = y, acc = acc_rate, mode = k))
 }
@@ -166,17 +173,14 @@ jump_move_deterministic <- function(state, mean_modes, target, gamma){
 # 内层循环
 
 JAMS_step <- function(state, gamma, mean_modes, target, epsilon,deterministic){
-  
   x <- state$x
   i <- state$i
-  
+ 
   # --- 选择 local 或 jump ---
   u <- runif(1)
-  
   if (u > epsilon) {
     ## ---- local move ----
     proposal <- local_move(state, mean_modes, target, gamma)
-    
     y   <- proposal$x
     acc <- proposal$acc
     k   <- i                     
@@ -208,7 +212,6 @@ JAMS_step <- function(state, gamma, mean_modes, target, epsilon,deterministic){
     k   <- proposal$mode
     
     proposal_type <- "jump"
-    
     u3 <- runif(1)
     if (u3 < acc) {
       x_new <- y
@@ -220,7 +223,6 @@ JAMS_step <- function(state, gamma, mean_modes, target, epsilon,deterministic){
       accepted <- FALSE
     }
   }
-  
   # --- 更新 state ---
   state_new <- list(x = x_new, i = i_new)
   
@@ -344,28 +346,27 @@ JAMS_MCMC <- function(steps, start_state, start_gamma,
   log <- vector("list", steps)   
   
   for (s in 1:steps){
-    
     # ---- 内层：执行一步 JAMS ----
     out <- JAMS_step(state, gamma,
                      mean_modes, target,
-                     epsilon)
-    
+                     epsilon,deterministic)
+
     # ---- 更新状态 ----
     state <- out$state         # { x_new , i_new }
-    
+
     # ---- 更新 mode_count, mean_obs, Sigma_obs ----
     res <- update_empirical(state, mode_count, mean_obs, Sigma_obs)
     
     mode_count <- res$mode_count
     mean_obs   <- res$mean_obs
     Sigma_obs  <- res$Sigma_obs
-    
+
     # ---- 更新 gamma（基于新状态 + mode_count） ----
     gamma <- update_gamma(out, gamma, mode_count, Sigma_obs,
                           AC1, AC2, alpha, alpha_opt, beta, epsilon_w, d, 
                           update_Sigma = update_Sigma,
                           update_w = update_w)
-    
+
     # ---- 记录日志 ----
     log[[s]] <- list(
       step = s,
