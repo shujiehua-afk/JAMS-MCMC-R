@@ -1,0 +1,154 @@
+---
+title: "banana_test_2"
+author: "Shujie Hua"
+date: "2025-11-28"
+output: html_document
+---
+```{r}
+source('~/Documents/Github/JAMS-MCMC-R/parallel_tempering.R')
+source('~/Documents/Github/JAMS-MCMC-R/MCMC_func.R')
+source('~/Documents/Github/JAMS-MCMC-R/MCMC_tools.R')
+```
+```{r}
+library(mvtnorm)
+library(ggplot2)
+```
+
+
+# 手动指定目标分布
+```{r}
+d <- 6
+Centers <-
+  list(
+    c( 5, 8.5,1,0,0,0),
+    c(-5,8.5,0,1,0,0),
+    c(-8.5, -5,0,0,1,0),
+    c( 0,-10,0,0,0,1),
+    c( 8.5,-5,0,0,0,0)
+  )
+
+Sigmas <- 
+  list(
+    diag(rep(2,d)),
+    diag(c(100, rep(1, d - 1))),
+    diag(rep(1,d)),
+    diag(rep(3,d)),
+    diag(c(100, rep(1, d - 1)))
+  )
+
+weights <- c(0.1,0.2,0.25,0.25,0.2)
+is_banana <- c(F,T,F,F,T)
+
+weighted_target<- final_target(Centers=Centers,
+             Sigmas = Sigmas,
+             weights = weights,
+             ifbanana = is_banana)
+```
+
+```{r}
+#weighted_target(rep(0,6))
+```
+
+# 真实的目标分布绘图（利用坐标变换），投影在前两个坐标
+```{r}
+sample_one <- function(center, Sigma, banana = FALSE, b = 0.03){
+  x <- rmvnorm(1, mean = center, sigma = Sigma)
+  if(banana){
+    y <- x
+    y[2] <- x[2] + b*(x[1]^2 - 100)
+    return(y)
+  } else {
+    return(x)
+  }
+}
+
+N <- 20000
+df <- data.frame(
+  y1 = numeric(N),
+  y2 = numeric(N),
+  comp = integer(N)
+)
+
+for(n in 1:N){
+  comp <- sample(1:5, 1, prob = weights)
+  x <- sample_one(Centers[[comp]], Sigmas[[comp]], is_banana[comp])
+  df$y1[n] <- x[1]
+  df$y2[n] <- x[2]
+  df$comp[n] <- comp
+}
+
+ggplot(df, aes(x = y1, y = y2, color = factor(comp))) +
+  geom_point(size = 0.3) +
+  coord_cartesian(xlim = c(-40, 40), ylim = c(-20, 30))+
+  scale_color_manual(values = c("#1f77b4","#d62728","#2ca02c","#9467bd","#ff7f0e")) +
+  theme_minimal() +
+  labs(x = "y1", y = "y2", color = "component")
+```
+
+
+# out3: JAMS (JAMS需要指定启动状况，这里手动用真实模式代替)
+```{r}
+d <- 6
+start_state <- list(x = rep(0,6), i = 1)
+
+mean_modes  <-Centers
+start_Sigma <-Sigmas
+
+start_gamma <- list(
+  w = c(0.1,0.2,0.25,0.25,0.2),
+  Sigma = start_Sigma,
+  Sigma_tilde = start_Sigma
+)
+
+
+out3 <- JAMS_MCMC(
+         steps       = 20000, 
+         start_state = start_state, 
+         start_gamma = start_gamma,
+         mean_modes  = mean_modes, 
+         target      = weighted_target, 
+         epsilon     = 0.5, 
+         d           = 6, 
+         AC1         = 300, 
+         AC2         = 100,
+         alpha       = 0.7, 
+         alpha_opt   = 0.3, 
+         beta        = 1e-5, 
+         epsilon_w   = 1e-5,
+         update_Sigma= TRUE,
+         update_w    = TRUE,
+        deterministic = TRUE
+       )
+```
+
+
+```{r}
+table(sapply(out3$log, function(x) x$i))
+xs <- t(sapply(out3$log, function(z) z$x))
+df_xs<-data.frame(x = xs[,1],y = xs[,2])
+ggplot(df_xs,aes(x=x,y=y))+geom_point(size = 0.1)
+```
+
+```{r}
+out <- parallel_tempering(beta = beta <- c(1, 0.8, 0.6, 0.4, 0.2),
+                   temper_num = 5,
+                   target = weighted_target, 
+                   start_where = rep(list(rep(0,6)), 5),
+                   Sigma =  rep(list(diag(6)), 5),
+                   step = 10000,
+                   d = 6)
+rec <- out$record      # [chain, step, dim]
+n_step <- dim(rec)[2]
+
+# 只取最低温链（第 1 链）的前两个维度
+X <- rec[1, , 1:2]      # n_step × 2
+
+df <- data.frame(
+    x = X[,1],
+    y = X[,2]
+)
+
+ggplot(df, aes(x = x, y = y)) +
+    geom_point(size = 0.3, color = "black", alpha = 0.7) +
+    labs(title = "Lowest-temperature chain: (x1, x2) projection")
+```
