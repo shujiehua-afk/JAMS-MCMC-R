@@ -22,10 +22,7 @@ This repository is intended both as a research record and a growing personal por
 /examples
     MCMC_real_example.Rmd     # 2D/3D multimodal demo, ESS evaluation, diagnostics
     mcmc2.Rmd                 # Banana-shaped + PT demonstrations
-/figs
-    # (optional) Output figures from examples
-/notes
-    # (optional) Research notes or explanations
+
 README.md
 ```
 
